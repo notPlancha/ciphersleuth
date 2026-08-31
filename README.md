@@ -34,15 +34,15 @@ The two ideas that make it work:
 2. **Language-model scoring** — of all the ways a ciphertext *could* decode,
    the one that reads most like natural English is almost always right. An
    n-gram model built from a public-domain corpus scores every candidate
-   plaintext; hill-climbing, simulated annealing and genetic search then
-   optimise the key against that score.
+   plaintext; hill-climbing and simulated annealing optimise the key against
+   that score, with a genetic algorithm available as an opt-in backend.
 
 ## Unique features
 
 | Capability | What it means |
 |---|---|
 | **Automatic fingerprinting** | Don't tell it the cipher — it guesses from statistics, with evidence and confidence. |
-| **Search-based key recovery** | Hill-climbing, simulated annealing *and* a genetic algorithm, all driven by an n-gram model. |
+| **Search-based key recovery** | Hill-climbing and simulated annealing (defaults), plus an opt-in genetic algorithm — all driven by an n-gram model. |
 | **Cross-cipher scoring** | Every candidate is re-scored with the same model so results are directly comparable. |
 | **Honest about difficulty** | Playfair & homophonic auto-break are clearly marked *best-effort*; short ciphertexts are handled conservatively instead of returning confident garbage. |
 | **Your own language model** | Rebuild the n-gram table from any corpus with one command. |
@@ -158,9 +158,10 @@ Every attack returns an `AttackResult`:
 | `atbash` | ✅ | ✅ **reliable** | fixed substitution (involution) |
 | `affine` | ✅ | ✅ **reliable** | brute-force the 12×26 valid keys |
 | `vigenere` | ✅ | ✅ **reliable** | Kasiski+Friedman key length, coordinate ascent on key |
-| `substitution` | ✅ | ✅ **reliable** | frequency-seeded SA + hill-climb over the key permutation (needs ~120+ chars) |
+| `substitution` | ✅ | ✅ **reliable** | frequency-seeded SA + hill-climb (or opt-in genetic) over the key permutation (needs ~120+ chars) |
 | `rail_fence` | ✅ | ✅ **reliable** | try all rail counts |
-| `columnar` | ✅ | ✅ **reliable** | try all column widths |
+| `columnar` | ✅ | ✅ **reliable** | keyed columnar transposition (try all widths × column orderings; width ≤ 7) |
+| `simple_columnar` | ✅ | ✅ **reliable** | unkeyed columnar (try all column widths) |
 | `bacon` | ✅ | ✅ | 5-bit A/B (or 0/1) code |
 | `playfair` | ✅ | ⚠️ **best-effort** | bigram-scored SA over the 5×5 key square; resolves long ciphertexts, can stall on short ones |
 | `homophonic` | — | ⚠️ **best-effort** | frequency-based symbol→letter solve |
@@ -212,7 +213,7 @@ ciphers — they just move through a key space and maximise the language score:
 * **Simulated annealing** — accepts occasionally-worse moves to escape local
   maxima (workhorse for Playfair).
 * **A genetic algorithm** — population-based search with order-preserving
-  crossover (useful for permutation keys).
+  OX1 crossover (opt-in for substitution via ``optimizer="genetic"``).
 
 A length guard keeps things honest: the more degrees of freedom a key has, the
 more ciphertext it needs. Substitution needs ~120 characters, Playfair ~220;

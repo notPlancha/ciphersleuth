@@ -98,6 +98,7 @@ def break_cipher(text: str, model=None, candidates=None, verbose: bool = False, 
         "vigenere": 40,        # needs ~several key-lengths of text
         "rail_fence": 20,
         "columnar": 20,
+        "simple_columnar": 20,
         "substitution": 120,   # ~26 degrees of freedom
         "playfair": 220,       # hardest; digraph key square
     }

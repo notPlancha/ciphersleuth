@@ -20,10 +20,12 @@ Each cipher is a class exposing:
 
 from __future__ import annotations
 
+import itertools
+import random
 from dataclasses import dataclass, field
 
 from .ngram import ALPHABET, ALPHABET_SIZE, NgramModel, clean_text, monogram_frequencies
-from .optim import hillclimb, simulated_annealing
+from .optim import genetic, hillclimb, recombination, simulated_annealing
 
 __all__ = [
     "CIPHERS",
@@ -36,6 +38,7 @@ __all__ = [
     "Homophonic",
     "Playfair",
     "RailFence",
+    "SimpleColumnar",
     "Substitution",
     "Vigenere",
     "get_cipher",
@@ -130,12 +133,26 @@ def _kasiski_key_lengths(text: str, max_len: int = 20) -> list[int]:
 
 
 def _friedman_key_length(text: str) -> float:
-    """Estimate Vigenère key length from the index of coincidence (Friedman test)."""
+    """Estimate Vigenère key length from the index of coincidence (Friedman).
+
+    Standard Friedman formula::
+
+        m = N·(kp − kr) / (IC·(N − 1) + kp − N·kr)
+
+    where ``kp ≈ 0.0667`` (English monographic coincidence), ``kr = 1/26``
+    (random coincidence), ``N`` is the text length and ``IC`` its index of
+    coincidence. For random text (IC ≈ kr) this grows toward ``N``; for
+    monoalphabetic English (IC ≈ kp) it collapses to 1. Clamped to >= 1.
+    """
     ic = _index_of_coincidence(text)
-    denom = (ALPHABET_SIZE - 1) * ic - (len(clean_text(text)) - 1) * 0.0667
+    N = len(clean_text(text))
+    if N < 2:
+        return 1.0
+    kp, kr = 0.0667, 1.0 / ALPHABET_SIZE
+    denom = ic * (N - 1) + kp - N * kr
     if abs(denom) < 1e-12:
         return 1.0
-    return 0.027 * len(clean_text(text)) / denom
+    return max(1.0, N * (kp - kr) / denom)
 
 
 #: Reference English monogram frequencies (A-Z), used by frequency-based attacks.
@@ -353,11 +370,6 @@ class Vigenere:
         )
 
 
-def _randint(lo: int, hi: int) -> int:
-    import random
-    return random.randint(lo, hi)
-
-
 class Substitution:
     name = "substitution"
 
@@ -375,7 +387,8 @@ class Substitution:
         return "".join(inv.get(ch, ch) for ch in text.upper())
 
     @staticmethod
-    def attack(text: str, model, restarts: int = 4, anneal_iters: int = 30000, **opts) -> AttackResult:
+    def attack(text: str, model, restarts: int = 4, anneal_iters: int = 30000,
+               optimizer: str = "sa", random_seed: int | None = None, **opts) -> AttackResult:
         """Break a simple substitution cipher via simulated annealing + hill climbing.
 
         The classic technique: start from a frequency-seeded key, then search the
@@ -404,34 +417,58 @@ class Substitution:
         def score(key):
             return model.score_avg(Substitution.decipher(text, key))
 
-        def mutate(key):
+        rng = random.Random(random_seed)
+
+        def mutate(key, rng):
             k = list(key)
-            i, j = _randint(0, 25), _randint(0, 25)
+            i, j = rng.randrange(0, 26), rng.randrange(0, 26)
             while j == i:
-                j = _randint(0, 25)
+                j = rng.randrange(0, 26)
             k[i], k[j] = k[j], k[i]
             return "".join(k)
 
         best_key, best_score = key, score(key)
-        # 2) a few hill-climbing runs, each started from a randomised key
-        for r in range(restarts):
-            if r > 0:
-                k = list(best_key)
-                for _ in range(3):  # perturb a few pairs for a fresh basin
-                    i, j = _randint(0, 25), _randint(0, 25)
+        if optimizer == "genetic":
+            # a population around the frequency-seeded key, evolved by
+            # order-preserving crossover + mutation
+            pop = [key]
+            for _ in range(9):
+                k = list(key)
+                for _ in range(2):
+                    i, j = rng.randrange(0, 26), rng.randrange(0, 26)
                     k[i], k[j] = k[j], k[i]
-                start = "".join(k)
-            else:
-                start = best_key
-            k, s = hillclimb(start, mutate, score, max_iters=3000, patience=250)
+                pop.append("".join(k))
+            gk, gs = genetic(
+                pop, score, mutate, crossover=recombination,
+                generations=300, keep=0.2, mutation_rate=0.2,
+                random_seed=rng.randint(0, 2**32),
+            )
+            gk, gs = hillclimb(gk, mutate, score, max_iters=4000, patience=600,
+                               random_seed=rng.randint(0, 2**32))
+            if gs > best_score:
+                best_key, best_score = gk, gs
+        else:
+            # 2) a few hill-climbing runs, each started from a randomised key
+            for r in range(restarts):
+                if r > 0:
+                    k = list(best_key)
+                    for _ in range(3):  # perturb a few pairs for a fresh basin
+                        i, j = rng.randrange(0, 26), rng.randrange(0, 26)
+                        k[i], k[j] = k[j], k[i]
+                    start = "".join(k)
+                else:
+                    start = best_key
+                k, s = hillclimb(start, mutate, score, max_iters=3000, patience=250,
+                                 random_seed=rng.randint(0, 2**32))
+                if s > best_score:
+                    best_key, best_score = k, s
+            # 3) simulated annealing for the harder escape from deep local maxima
+            k, s = simulated_annealing(
+                best_key, mutate, score, iters=anneal_iters, t_start=1.0, t_end=0.005,
+                random_seed=rng.randint(0, 2**32),
+            )
             if s > best_score:
                 best_key, best_score = k, s
-        # 3) simulated annealing for the harder escape from deep local maxima
-        k, s = simulated_annealing(
-            best_key, mutate, score, iters=anneal_iters, t_start=1.0, t_end=0.005
-        )
-        if s > best_score:
-            best_key, best_score = k, s
         pt = Substitution.decipher(text, best_key)
         return AttackResult("substitution", pt, key=best_key, score=best_score,
                             method="frequency-seeded SA + hill-climb over key permutation")
@@ -510,15 +547,19 @@ class RailFence:
                             method=f"try all rail counts 2..{min(max_rails, len(clean))}")
 
 
-class Columnar:
-    name = "columnar"
+class SimpleColumnar:
+    """Unkeyed columnar transposition: write rows, read columns in order.
+
+    The key only sets the column *width*; columns are never reordered. Kept
+    under its own name so it is not mistaken for a keyed columnar cipher.
+    """
+
+    name = "simple_columnar"
 
     @staticmethod
     def encipher(text: str, key: str = "KEY") -> str:
         clean = clean_text(text)
         width = len(clean_text(key)) or 1
-        if width <= 0:
-            width = 1
         rows = (len(clean) + width - 1) // width
         padded = clean.ljust(rows * width, "X")
         grid = [list(padded[i * width:(i + 1) * width]) for i in range(rows)]
@@ -550,20 +591,95 @@ class Columnar:
     def attack(text: str, model, max_width: int = 12, **opts) -> AttackResult:
         """Try every plausible column width; score the identity-order decode.
 
-        This cipher transposes by writing the plaintext row-by-row into
-        ``width`` columns and reading the columns top-to-bottom (a simple
-        columnar transposition without a reordering key). Breaking it is
-        therefore just a search over the width.
+        A simple (unkeyed) columnar transposition writes row-by-row into
+        ``width`` columns and reads them top-to-bottom with no reordering, so
+        breaking it is just a search over the width.
         """
         clean = clean_text(text)
         best = None
         for width in range(2, min(max_width, len(clean)) + 1):
-            pt = Columnar.decipher(text, "A" * width)
+            pt = SimpleColumnar.decipher(text, "A" * width)
             s = model.score_avg(pt)
             if best is None or s > best[0]:
                 best = (s, pt, width)
-        return AttackResult("columnar", best[1], key=best[2], score=best[0],
+        return AttackResult("simple_columnar", best[1], key=best[2], score=best[0],
                             method="try every column width; identity column order")
+
+
+class Columnar:
+    """Keyed columnar transposition: write rows, read columns in key order."""
+
+    name = "columnar"
+
+    @staticmethod
+    def _transpose(clean: str, width: int, order) -> str:
+        rows = (len(clean) + width - 1) // width
+        padded = clean.ljust(rows * width, "X")
+        grid = [list(padded[i * width:(i + 1) * width]) for i in range(rows)]
+        out = []
+        for col in order:
+            for row in range(rows):
+                out.append(grid[row][col])
+        return "".join(out)
+
+    @staticmethod
+    def _restore(clean: str, width: int, order) -> str:
+        rows = (len(clean) + width - 1) // width
+        cols = [None] * width
+        idx = 0
+        for col in order:
+            cols[col] = clean[idx:idx + rows]
+            idx += rows
+        out = []
+        for r in range(rows):
+            for c in range(width):
+                if r < len(cols[c]):
+                    out.append(cols[c][r])
+        return "".join(out).rstrip("X")
+
+    @staticmethod
+    def encipher(text: str, key: str = "KEY") -> str:
+        clean = clean_text(text)
+        width = len(clean_text(key)) or 1
+        return Columnar._transpose(clean, width, _column_order(key))
+
+    @staticmethod
+    def decipher(text: str, key: str = "KEY") -> str:
+        clean = clean_text(text)
+        width = len(clean_text(key)) or 1
+        return Columnar._restore(clean, width, _column_order(key))
+
+    @staticmethod
+    def attack(text: str, model, max_width: int = 7, **opts) -> AttackResult:
+        """Best-effort keyed columnar break: search width and column ordering.
+
+        For each plausible width we try every column read-order (permutation),
+        score the decode and keep the best. The true key maps to exactly one
+        such ordering, so this is exact for the encipherment convention here;
+        the factorial cost caps the width at ``max_width``.
+        """
+        clean = clean_text(text)
+        best = None
+        limit = min(max_width, len(clean))
+        for width in range(2, limit + 1):
+            for order in itertools.permutations(range(width)):
+                pt = Columnar._restore(clean, width, order)
+                s = model.score_avg(pt)
+                if best is None or s > best[0]:
+                    best = (s, pt, (width, order))
+        return AttackResult("columnar", best[1], key=best[2], score=best[0],
+                            method=f"brute-force widths 2..{limit} x all column orderings")
+
+
+def _column_order(key: str) -> list[int]:
+    """Column read/write order for a keyed columnar transposition.
+
+    Columns are reordered by the alphabetical rank of the key letters, with
+    ties broken by original position — the standard keyed columnar convention.
+    """
+    width = len(clean_text(key)) or 1
+    base = clean_text(key).ljust(width, "A")[:width]
+    return sorted(range(width), key=lambda i: (base[i], i))
 
 
 class Playfair:
@@ -639,7 +755,8 @@ class Playfair:
         return "".join(out)
 
     @staticmethod
-    def attack(text: str, model, iters: int = 60000, restarts: int = 2, **opts) -> AttackResult:
+    def attack(text: str, model, iters: int = 60000, restarts: int = 2,
+               random_seed: int | None = None, **opts) -> AttackResult:
         """Recover the Playfair key square via simulated annealing on a bigram model.
 
         Playfair encrypts *digraphs*, so a bigram (2-letter) language model is a
@@ -673,18 +790,22 @@ class Playfair:
         def score(ordering):
             return bigram.score_avg(decrypt(ordering))
 
-        def mutate(ordering):
+        rng = random.Random(random_seed)
+
+        def mutate(ordering, rng):
             o = list(ordering)
-            i, j = _randint(0, 24), _randint(0, 24)
+            i, j = rng.randrange(0, 25), rng.randrange(0, 25)
             o[i], o[j] = o[j], o[i]
             return o
 
         best_ord, best_s = None, float("-inf")
         for r in range(restarts):
             o, s = simulated_annealing(
-                letters, mutate, score, iters=iters, t_start=2.0, t_end=0.005
+                letters, mutate, score, iters=iters, t_start=2.0, t_end=0.005,
+                random_seed=rng.randint(0, 2**32),
             )
-            o, s = hillclimb(o, mutate, score, max_iters=4000, patience=600)
+            o, s = hillclimb(o, mutate, score, max_iters=4000, patience=600,
+                             random_seed=rng.randint(0, 2**32))
             if s > best_s:
                 best_ord, best_s = o, s
         pt = decrypt(best_ord)
@@ -750,7 +871,7 @@ CIPHERS: dict[str, type] = {
     c.name: c
     for c in (
         Caesar, Atbash, Affine, Vigenere, Substitution, RailFence,
-        Columnar, Playfair, Bacon, Homophonic,
+        SimpleColumnar, Columnar, Playfair, Bacon, Homophonic,
     )
 }
 

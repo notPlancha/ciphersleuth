@@ -83,6 +83,7 @@ ROUNDTRIP = [
     ("substitution", {"key": "QWERTYUIOPASDFGHJKLZXCVBNM"}),
     ("rail_fence", {"rails": 4}),
     ("columnar", {"key": "ZEBRA"}),
+    ("simple_columnar", {"key": "ZEBRA"}),
     ("playfair", {"key": "MONARCHY"}),
     ("bacon", {}),
 ]
@@ -202,5 +203,136 @@ def test_decode_rot13():
 
 def test_list_ciphers():
     names = list_ciphers()
-    for expected in ("caesar", "vigenere", "substitution", "rail_fence", "playfair"):
+    for expected in ("caesar", "vigenere", "substitution", "rail_fence", "playfair", "columnar", "simple_columnar"):
         assert expected in names
+
+
+# --------------------------------------------------------------------------
+# adversarial / contract tests (the bugs ChatGPT's review flagged)
+# --------------------------------------------------------------------------
+
+
+def test_cli_key_mapping_all_ciphers(capsys):
+    """The CLI key parser must pass the right kwargs to every registered
+    encipher/decipher, not just caesar. (Regression: affine/rail_fence/columnar
+    used to receive a spurious ``shift=`` and crash.)"""
+    from ciphersleuth.cli import main as cli_main
+
+    # caesar
+    assert cli_main(["encipher", "caesar", "--key", "7", "HELLO WORLD"]) == 0
+    assert capsys.readouterr().out.strip().startswith("OLSSV")
+    # affine (a,b)
+    assert cli_main(["encipher", "affine", "--key", "5,8", "HELLO"]) == 0
+    assert "RCLLA" in capsys.readouterr().out
+    # rail_fence numeric
+    assert cli_main(["encipher", "rail_fence", "--key", "3", "HELLO"]) == 0
+    assert capsys.readouterr().out.strip()  # no TypeError
+    # columnar string key
+    assert cli_main(["encipher", "columnar", "--key", "ZEBRA", "HELLO"]) == 0
+    assert capsys.readouterr().out.strip()
+    # vigenere
+    assert cli_main(["encipher", "vigenere", "--key", "LEMON", "HELLO"]) == 0
+    assert "SIXZB" in capsys.readouterr().out
+
+
+def test_friedman_estimates_true_key_length():
+    """Friedman must return a sane, positive key-length estimate close to the
+    true one, not a negative value clamped to 1."""
+    from ciphersleuth.ciphers import Vigenere, _friedman_key_length
+
+    for key in ("TEST", "CRYPTO", "SECRETKEY"):
+        ct = Vigenere.encipher(MSG, key)
+        est = _friedman_key_length(ct)
+        assert est >= 1.0, f"non-positive estimate for key {key}: {est}"
+        # Friedman is an estimate that degrades for longer keys; allow a
+        # relative tolerance around the true length.
+        tol = max(2.0, 0.4 * len(key))
+        assert abs(est - len(key)) <= tol, f"key {key}: estimated {est:.2f}"
+
+
+def test_recombination_combines_parents():
+    """OX1 crossover must yield a valid permutation of the same set that is
+    NOT just a copy of parent b (regression: it returned parent b verbatim)."""
+    import random as _r
+
+    from ciphersleuth.optim import recombination
+
+    a = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    b = list("ZYXWVUTSRQPONMLKJIHGFEDCBA")
+    mixed = False
+    for seed in range(200):
+        child = recombination(a, b, rng=_r.Random(seed))
+        assert set(child) == set(a) == set(b)
+        if child != a and child != b:
+            mixed = True
+            break
+    assert mixed, "recombination never produced a child different from both parents"
+
+
+def test_recombination_preserves_string_type():
+    import random as _r
+
+    from ciphersleuth.optim import recombination
+
+    a, b = "ABCDE", "EDCBA"
+    child = recombination(a, b, rng=_r.Random(3))
+    assert isinstance(child, str)
+    assert set(child) == set(a)
+
+
+def test_random_seed_makes_runs_reproducible():
+    """Seeding a search must fully pin the run (regression: hillclimb ignored
+    the seed and mutate used the module-global RNG)."""
+    from ciphersleuth.ciphers import Substitution
+    from ciphersleuth.ngram import load_model
+
+    m = load_model()
+    ct = Substitution.encipher(MSG, "QWERTYUIOPASDFGHJKLZXCVBNM")
+    r1 = Substitution.attack(ct, m, random_seed=42)
+    r2 = Substitution.attack(ct, m, random_seed=42)
+    assert r1.plaintext == r2.plaintext
+    assert r1.key == r2.key
+    # a different seed should (overwhelmingly) take a different trajectory
+    r3 = Substitution.attack(ct, m, random_seed=7)
+    assert (r1.plaintext != r3.plaintext) or (r1.key != r3.key)
+
+
+def test_genetic_substitution_backend():
+    """The genetic backend is wired in: it must always produce a valid
+    permutation key (the hard invariant), and on a good seed it must actually
+    recover the plaintext (proving it is functional, not a no-op). It is not
+    expected to be as reliable as the default SA+hill-climb path."""
+    from ciphersleuth.ciphers import Substitution
+    from ciphersleuth.ngram import load_model
+
+    m = load_model()
+    ct = Substitution.encipher(MSG, "QWERTYUIOPASDFGHJKLZXCVBNM")
+    alphabet = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    best_acc = 0.0
+    for seed in range(8):
+        res = Substitution.attack(ct, m, optimizer="genetic", random_seed=seed)
+        # invariant: the recovered key is always a full 26-letter permutation
+        assert set(res.key) == alphabet and len(res.key) == 26, f"invalid key {res.key!r}"
+        acc = sum(1 for a, b in zip(clean_text(res.plaintext), clean_text(MSG)) if a == b)
+        best_acc = max(best_acc, acc / len(clean_text(MSG)))
+    # functional: at least one seed recovers a large fraction of the plaintext
+    assert best_acc >= 0.9, f"genetic never reached usable accuracy, best={best_acc:.2f}"
+
+
+def test_keyed_columnar_differs_from_simple():
+    """The keyed columnar must actually reorder columns (regression: it was
+    width-only identity order) and still round-trip."""
+    from ciphersleuth.ciphers import Columnar, SimpleColumnar
+
+    src = "THEQUICKBROWNFOXJUMPSOVERTHELAZYDOG"
+    keyed_ct = Columnar.encipher(src, "ZEBRA")
+    simple_ct = SimpleColumnar.encipher(src, "ZEBRA")
+    assert keyed_ct != simple_ct, "keyed columnar does not reorder columns"
+    assert clean_text(Columnar.decipher(keyed_ct, "ZEBRA")) == src
+
+
+def test_break_keyed_columnar():
+    ct = C.Columnar.encipher(MSG, "ZEBRA")
+    res = break_cipher(ct, candidates=["columnar"])
+    acc = sum(1 for a, b in zip(clean_text(res.plaintext), clean_text(MSG)) if a == b)
+    assert acc / len(clean_text(MSG)) >= 0.98, f"keyed columnar broke wrong: {res.plaintext[:60]}"
