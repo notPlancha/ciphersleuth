@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ciphersleuth"
+version = "1.0.0"
+description = "Automatic cryptanalysis of classical ciphers: fingerprint the cipher, then break it with search-based optimization driven by an n-gram language model."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Piper Firefly" }]
+keywords = [
+    "cryptanalysis", "cipher", "cryptography", "vigenere", "substitution",
+    "caesar", "affine", "transposition", "ctf", "puzzle", "classical-cipher",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Education",
+    "Topic :: Games/Entertainment :: Puzzle Games",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+ciphersleuth = "ciphersleuth.cli:main"
+
+[tool.setuptools]
+packages = ["ciphersleuth"]
+
+[tool.setuptools.package-data]
+ciphersleuth = ["../data/ngrams/*.json"]
