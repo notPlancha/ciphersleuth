@@ -34,7 +34,8 @@ _MODEL = load_model()
 
 def _parse_text(args) -> str:
     if args.file:
-        return open(args.file, encoding="utf-8").read().strip()
+        with open(args.file, encoding="utf-8") as fh:
+            return fh.read().strip()
     return args.text or ""
 
 
@@ -47,7 +48,8 @@ def cmd_fingerprint(args) -> int:
 def cmd_break(args) -> int:
     text = _parse_text(args)
     res = break_cipher(text, model=_MODEL, candidates=args.ciphers,
-                       verbose=args.verbose, restarts=args.restarts)
+                       verbose=args.verbose, restarts=args.restarts,
+                       random_seed=args.seed)
     if res is None:
         print("No cipher could be identified or broken.", file=sys.stderr)
         return 1
@@ -100,15 +102,23 @@ def _key(args) -> dict:
         return {}                       # these ciphers take no key
     if args.key is None:
         return {}                       # let the cipher use its default key
+
+    def int_or_exit(s, what):
+        try:
+            return int(s)
+        except ValueError:
+            raise SystemExit(f"{what} must be an integer, got {s!r}")
+
     if args.cipher == "caesar":
-        return {"shift": int(args.key) % 26}
+        return {"shift": int_or_exit(args.key, "caesar --key") % 26}
     if args.cipher == "affine":
         parts = args.key.split(",")
         if len(parts) != 2:
             raise SystemExit("affine --key must be of the form 'a,b'")
-        return {"a": int(parts[0]), "b": int(parts[1])}
+        return {"a": int_or_exit(parts[0], "affine a"),
+                "b": int_or_exit(parts[1], "affine b")}
     if args.cipher == "rail_fence":
-        return {"rails": int(args.key)}
+        return {"rails": int_or_exit(args.key, "rail_fence --key")}
     # vigenere, substitution, columnar, simple_columnar, playfair: string key
     return {"key": args.key}
 
@@ -134,14 +144,16 @@ def main(argv=None) -> int:
     b.add_argument("--ciphers", nargs="*", help="restrict to these ciphers")
     b.add_argument("--verbose", action="store_true", help="show each candidate")
     b.add_argument("--restarts", type=int, default=5, help="substitution hill-climb restarts")
+    b.add_argument("--seed", type=int, default=None,
+                   help="RNG seed for reproducible stochastic attacks")
     b.set_defaults(func=cmd_break)
 
     f = sub.add_parser("fingerprint", help="detect the likely cipher type")
     add_text(f, required=False)
     f.set_defaults(func=cmd_fingerprint)
 
-    l = sub.add_parser("list", help="list supported ciphers and encodings")
-    l.set_defaults(func=cmd_list)
+    lst = sub.add_parser("list", help="list supported ciphers and encodings")
+    lst.set_defaults(func=cmd_list)
 
     en = sub.add_parser("encipher", help="encipher text with a known cipher")
     en.add_argument("cipher")

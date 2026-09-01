@@ -33,13 +33,18 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "ruff>=0.4",
 ]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 110
 
 [project.scripts]
 ciphersleuth = "ciphersleuth.cli:main"
 
 [tool.setuptools]
-packages = ["ciphersleuth"]
+packages = ["ciphersleuth", "ciphersleuth.data"]
 
 [tool.setuptools.package-data]
-ciphersleuth = ["../data/ngrams/*.json"]
+ciphersleuth = ["data/ngrams/*.json"]

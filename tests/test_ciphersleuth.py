@@ -125,7 +125,9 @@ BREAK_TESTS = [
 def test_break(name, kwargs):
     cls = C.get_cipher(name)
     ct = cls.encipher(MSG, **kwargs) if kwargs else cls.encipher(MSG)
-    res = break_cipher(ct)
+    # fixed seed so the stochastic substitution attack is reproducible (was
+    # flaky unseeded — the genetic/simulated-annealing search is randomised).
+    res = break_cipher(ct, random_seed=42)
     acc = sum(1 for a, b in zip(clean_text(res.plaintext), clean_text(MSG)) if a == b)
     assert acc / len(clean_text(MSG)) >= 0.98, f"{name} decoded wrong: {res.plaintext[:60]}"
 

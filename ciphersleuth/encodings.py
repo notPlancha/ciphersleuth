@@ -20,11 +20,11 @@ import re
 __all__ = ["decode_base64", "decode_binary", "decode_hex", "decode_morse", "decode_rot13"]
 
 
-def decode_binary(text: str) -> tuple[str, str]:
+def decode_binary(text: str) -> tuple[str, str, bool]:
     """Decode a run of 8-bit binary (space- or fixed-width grouped)."""
     body = re.sub(r"\s+", "", text)
     if not body or not set(body) <= {"0", "1"}:
-        return text, "not binary"
+        return text, "not binary", False
     # group by 8 (or 7) bits
     for width in (8, 7):
         if len(body) % width != 0:
@@ -36,38 +36,38 @@ def decode_binary(text: str) -> tuple[str, str]:
             )
             # sanity: printable-ish
             if all(32 <= ord(c) <= 126 or c in "\n\r\t" for c in out):
-                return out, f"decoded {width}-bit binary"
+                return out, f"decoded {width}-bit binary", True
         except ValueError:
             continue
-    return text, "binary but not 7/8-bit ASCII"
+    return text, "binary but not 7/8-bit ASCII", False
 
 
-def decode_hex(text: str) -> tuple[str, str]:
+def decode_hex(text: str) -> tuple[str, str, bool]:
     """Decode a hex string to bytes -> text."""
     body = re.sub(r"\s+", "", text)
     if not body or not set(body) <= set("0123456789abcdefABCDEF") or len(body) % 2:
-        return text, "not even-length hex"
+        return text, "not even-length hex", False
     try:
         raw = binascii.unhexlify(body)
-        return raw.decode("utf-8", "replace"), f"decoded {len(raw)} bytes of hex"
+        return raw.decode("utf-8", "replace"), f"decoded {len(raw)} bytes of hex", True
     except binascii.Error:
-        return text, "invalid hex"
+        return text, "invalid hex", False
 
 
-def decode_base64(text: str) -> tuple[str, str]:
+def decode_base64(text: str) -> tuple[str, str, bool]:
     """Decode Base64 to text."""
     body = text.strip()
     if not body:
-        return text, "empty"
+        return text, "empty", False
     # strip surrounding whitespace/newlines that padding might misalign
     body = re.sub(r"\s+", "", body)
     if not re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", body):
-        return text, "not Base64 alphabet"
+        return text, "not Base64 alphabet", False
     try:
         raw = base64.b64decode(body, validate=True)
-        return raw.decode("utf-8", "replace"), f"decoded Base64 ({len(raw)} bytes)"
+        return raw.decode("utf-8", "replace"), f"decoded Base64 ({len(raw)} bytes)", True
     except (binascii.Error, ValueError):
-        return text, "Base64 but failed to decode"
+        return text, "Base64 but failed to decode", False
 
 
 #: Morse mapping (letters + digits).
@@ -83,10 +83,10 @@ _MORSE = {
 }
 
 
-def decode_morse(text: str) -> tuple[str, str]:
+def decode_morse(text: str) -> tuple[str, str, bool]:
     """Decode Morse: letters separated by spaces, words by ``/`` or multiple spaces."""
     if not set(text.strip()) <= set(".-/ "):
-        return text, "not Morse characters"
+        return text, "not Morse characters", False
     words = text.strip().replace("  ", " / ").replace("\t", " / ").split("/")
     out_words = []
     for word in words:
@@ -94,17 +94,19 @@ def decode_morse(text: str) -> tuple[str, str]:
         for sym in word.split():
             letters.append(_MORSE.get(sym, "?"))
         out_words.append("".join(letters))
-    return " ".join(out_words).strip(), "decoded Morse"
+    return " ".join(out_words).strip(), "decoded Morse", True
 
 
-def decode_rot13(text: str) -> tuple[str, str]:
+def decode_rot13(text: str) -> tuple[str, str, bool]:
     """Decode ROT13 (self-inverse)."""
     out = []
+    changed = False
     for ch in text:
         if "A" <= ch <= "Z":
-            out.append(chr((ord(ch) - 65 + 13) % 26 + 65))
+            out.append(chr((ord(ch) - 65 + 13) % 26 + 65)); changed = True
         elif "a" <= ch <= "z":
-            out.append(chr((ord(ch) - 97 + 13) % 26 + 97))
+            out.append(chr((ord(ch) - 97 + 13) % 26 + 97)); changed = True
         else:
             out.append(ch)
-    return "".join(out), "ROT13 applied"
+    dec = "".join(out)
+    return dec, ("ROT13 applied" if changed else "no letters to rotate"), changed

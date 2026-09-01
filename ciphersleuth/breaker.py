@@ -38,8 +38,8 @@ def break_encoding(text: str):
     """
     charset, _ = detect_charset(text)
     if charset == "binary":
-        dec, note = E.decode_binary(text)
-        if "not" not in note:
+        dec, _, ok = E.decode_binary(text)
+        if ok:
             return dec, "binary"
         # not 7/8-bit -> try Bacon (5-bit) decode
         from .ciphers import Bacon
@@ -48,16 +48,19 @@ def break_encoding(text: str):
             return pt, "bacon"
         return text, None
     if charset == "hex":
-        dec, note = E.decode_hex(text)
-        return (dec, "hex") if "not" not in note else (text, None)
+        dec, _, ok = E.decode_hex(text)
+        return (dec, "hex") if ok else (text, None)
     if charset == "base64":
-        dec, note = E.decode_base64(text)
-        return (dec, "base64") if "not" not in note else (text, None)
+        dec, _, ok = E.decode_base64(text)
+        return (dec, "base64") if ok else (text, None)
     if charset == "morse":
-        dec, note = E.decode_morse(text)
-        return (dec, "morse") if "not" not in note else (text, None)
-    dec, note = E.decode_rot13(text)
-    return (dec, "rot13") if "applied" in note else (text, None)
+        dec, _, ok = E.decode_morse(text)
+        return (dec, "morse") if ok else (text, None)
+    dec, _, ok = E.decode_rot13(text)
+    # ROT13 is self-inverse: only treat it as a real decode if it actually
+    # changed the text (i.e. there were letters to rotate), so plain text is
+    # not reported as "rot13" confidently.
+    return (dec, "rot13") if ok else (text, None)
 
 
 def break_cipher(text: str, model=None, candidates=None, verbose: bool = False, **opts):

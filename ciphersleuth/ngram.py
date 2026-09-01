@@ -31,6 +31,7 @@ Design notes
 
 from __future__ import annotations
 
+import importlib.resources
 import json
 import math
 import re
@@ -86,6 +87,11 @@ class NgramModel:
 
     def finalize(self) -> None:
         """Convert raw counts into a log-probability table (call once)."""
+        if not self._total:
+            # No grams were ever observed: there is no distribution to model.
+            self._logprob = {}
+            self._floor_log = -1.0
+            return
         self._logprob = {
             gram: math.log10(count / self._total)
             for gram, count in self._counts.items()
@@ -99,7 +105,10 @@ class NgramModel:
         text = clean_text(text)
         n, lp, fl = self.n, self._logprob, self._floor_log
         if len(text) < n:
-            return 0.0
+            # Too short to contain a single n-gram. Use -inf (a neutral
+            # "cannot score" sentinel) rather than 0.0, which would outrank
+            # every legitimate (negative) score and wrongly win comparisons.
+            return -math.inf
         total = 0.0
         for i in range(len(text) - n + 1):
             total += lp.get(text[i : i + n], fl)
@@ -112,7 +121,7 @@ class NgramModel:
         """
         text = clean_text(text)
         if len(text) < self.n:
-            return 0.0
+            return -math.inf
         return self.score(text) / (len(text) - self.n + 1)
 
     # -- persistence ---------------------------------------------------
@@ -144,13 +153,13 @@ class NgramModel:
 def load_model(path=None) -> NgramModel:
     """Load the bundled English quadgram model (or the one at *path*)."""
     if path is None:
-        ngram_dir = Path(__file__).resolve().parent.parent / "data" / "ngrams"
+        data = importlib.resources.files("ciphersleuth").joinpath("data/ngrams")
         for name in ("english_4grams.json", "english_quadgrams.json"):
-            candidate = ngram_dir / name
-            if candidate.exists():
+            candidate = data.joinpath(name)
+            if candidate.is_file():
                 return NgramModel.load(candidate)
         raise FileNotFoundError(
-            f"No bundled n-gram model found in {ngram_dir}. Run "
+            f"No bundled n-gram model found in {data}. Run "
             "scripts/build_ngrams.py on a corpus first."
         )
     return NgramModel.load(path)
@@ -158,7 +167,9 @@ def load_model(path=None) -> NgramModel:
 
 def _bigram_dir():
     """Absolute path to the bundled English bigram model (used by Playfair)."""
-    return Path(__file__).resolve().parent.parent / "data" / "ngrams" / "english_2grams.json"
+    return importlib.resources.files("ciphersleuth").joinpath(
+        "data/ngrams/english_2grams.json"
+    )
 
 
 def monogram_frequencies(text: str) -> list[float]:

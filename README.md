@@ -73,7 +73,7 @@ python3 -m ciphersleuth.cli --help
 
 # or install as a package (no third-party dependencies)
 pip install .
-pip install .[dev]      # adds pytest + ruff for development
+pip install .[dev]      # adds pytest + ruff for development (ruff is needed for `make lint`)
 ```
 
 Requires Python 3.9+.
@@ -276,7 +276,7 @@ make lint    # run ruff
 make demo    # run the Vigenère worked example
 ```
 
-30 tests cover round-trips, automatic breaking of every cipher, fingerprinting,
+39 tests cover round-trips, automatic breaking of every cipher, fingerprinting,
 encoding detection and the n-gram model.
 
 ## Ethics & scope

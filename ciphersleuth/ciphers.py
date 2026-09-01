@@ -363,6 +363,11 @@ class Vigenere:
             s = model.score_avg(pt)
             if best is None or s > best[0]:
                 best = (s, pt, key, key_len)
+        if best is None:
+            return AttackResult(
+                "vigenere", clean, key="", score=float("-inf"),
+                method="no key length had enough text to attack",
+            )
         return AttackResult(
             "vigenere", best[1], key=best[2], score=best[0],
             method="Kasiski+Friedman key-length estimate, then coordinate ascent on key",
@@ -377,12 +382,24 @@ class Substitution:
     def encipher(text: str, key: str = ALPHABET) -> str:
         """key[i] is the letter that plaintext letter i maps to."""
         key = clean_text(key).ljust(ALPHABET_SIZE, ALPHABET[0])[:ALPHABET_SIZE]
+        if len(set(key)) != ALPHABET_SIZE:
+            raise ValueError(
+                "Substitution key must map each letter to a distinct letter "
+                "(a permutation of A-Z). Duplicates: "
+                + ",".join(sorted(c for c in set(key) if key.count(c) > 1))
+            )
         table = {ALPHABET[i]: key[i] for i in range(ALPHABET_SIZE)}
         return "".join(table.get(ch, ch) for ch in text.upper())
 
     @staticmethod
     def decipher(text: str, key: str = ALPHABET) -> str:
         key = clean_text(key).ljust(ALPHABET_SIZE, ALPHABET[0])[:ALPHABET_SIZE]
+        if len(set(key)) != ALPHABET_SIZE:
+            raise ValueError(
+                "Substitution key must map each letter to a distinct letter "
+                "(a permutation of A-Z). Duplicates: "
+                + ",".join(sorted(c for c in set(key) if key.count(c) > 1))
+            )
         inv = {key[i]: ALPHABET[i] for i in range(ALPHABET_SIZE)}
         return "".join(inv.get(ch, ch) for ch in text.upper())
 
@@ -543,6 +560,11 @@ class RailFence:
             s = model.score_avg(pt)
             if best is None or s > best[0]:
                 best = (s, pt, rails)
+        if best is None:
+            return AttackResult(
+                "rail_fence", clean, key=1, score=float("-inf"),
+                method="text too short for any rail count",
+            )
         return AttackResult("rail_fence", best[1], key=best[2], score=best[0],
                             method=f"try all rail counts 2..{min(max_rails, len(clean))}")
 
@@ -602,6 +624,11 @@ class SimpleColumnar:
             s = model.score_avg(pt)
             if best is None or s > best[0]:
                 best = (s, pt, width)
+        if best is None:
+            return AttackResult(
+                "simple_columnar", clean, key="", score=float("-inf"),
+                method="text too short for any column width",
+            )
         return AttackResult("simple_columnar", best[1], key=best[2], score=best[0],
                             method="try every column width; identity column order")
 
@@ -667,6 +694,11 @@ class Columnar:
                 s = model.score_avg(pt)
                 if best is None or s > best[0]:
                     best = (s, pt, (width, order))
+        if best is None:
+            return AttackResult(
+                "columnar", clean, key="", score=float("-inf"),
+                method="text too short for any column width",
+            )
         return AttackResult("columnar", best[1], key=best[2], score=best[0],
                             method=f"brute-force widths 2..{limit} x all column orderings")
 
@@ -739,7 +771,9 @@ class Playfair:
         sq = Playfair._square(key)
         pos = {sq[r][c]: (r, c) for r in range(5) for c in range(5)}
         out = []
-        for i in range(0, len(clean), 2):
+        # ciphertext must be even-length; a trailing odd letter is malformed and
+        # is dropped rather than raised on.
+        for i in range(0, len(clean) - 1, 2):
             a, b = clean[i], clean[i + 1]
             ar, ac = pos[a]
             br, bc = pos[b]
@@ -775,7 +809,8 @@ class Playfair:
             sq = [ordering[i:i + 5] for i in range(0, 25, 5)]
             pos = {sq[r][c]: (r, c) for r in range(5) for c in range(5)}
             out = []
-            for i in range(0, len(clean), 2):
+            # tolerate a trailing odd letter rather than raising on malformed input
+            for i in range(0, len(clean) - 1, 2):
                 a, b = clean[i], clean[i + 1]
                 ar, ac = pos[a]
                 br, bc = pos[b]
@@ -808,6 +843,9 @@ class Playfair:
                              random_seed=rng.randint(0, 2**32))
             if s > best_s:
                 best_ord, best_s = o, s
+        if best_ord is None:  # restarts=0 (or all restarts failed): nothing decoded
+            best_ord = list(letters)
+            best_s = float("-inf")
         pt = decrypt(best_ord)
         return AttackResult("playfair", pt, key="".join(best_ord), score=best_s,
                             method="simulated annealing over key square, bigram scoring")
@@ -831,7 +869,10 @@ class Bacon:
         clean = "".join(c for c in t if c in "01")
         out = []
         for i in range(0, len(clean) - 4, 5):
-            out.append(ALPHABET[int(clean[i:i + 5], 2)])
+            value = int(clean[i:i + 5], 2)
+            # five bits encode 0..31 but the alphabet has only 26 letters;
+            # values >= 26 are invalid and mapped to '?' rather than raising.
+            out.append(ALPHABET[value] if value < ALPHABET_SIZE else "?")
         return "".join(out)
 
     @staticmethod
@@ -843,6 +884,27 @@ class Bacon:
 
 class Homophonic:
     name = "homophonic"
+
+    @staticmethod
+    def encipher(text: str) -> str:
+        """Encode to a toy homophonic code: each letter becomes its 2-digit code.
+
+        ``A``->``01`` .. ``Z``->``26``, space-separated. This is a simple,
+        invertible homophone code that pairs with :meth:`decipher`.
+        """
+        return " ".join(f"{ord(ch) - 64:02d}" for ch in clean_text(text))
+
+    @staticmethod
+    def decipher(text: str) -> str:
+        """Invert a toy homophonic code produced by :meth:`encipher`.
+
+        Tokens that are not a valid 1..26 code are skipped.
+        """
+        out = []
+        for tok in text.strip().split():
+            if tok.isdigit() and 1 <= int(tok) <= ALPHABET_SIZE:
+                out.append(ALPHABET[int(tok) - 1])
+        return "".join(out)
 
     @staticmethod
     def attack(text: str, model, **opts) -> AttackResult:
@@ -860,7 +922,7 @@ class Homophonic:
         counts = Counter(tokens)
         ranked_tokens = [t for t, _ in counts.most_common()]
         ranked_letters = sorted(ALPHABET, key=lambda c: -ENGLISH_FREQS[ord(c) - 65])
-        mapping = {t: l for t, l in zip(ranked_tokens, ranked_letters)}
+        mapping = {t: lett for t, lett in zip(ranked_tokens, ranked_letters)}
         pt = "".join(mapping.get(t, "?") for t in tokens)
         return AttackResult("homophonic", pt, key=mapping, score=model.score_avg(pt),
                             method="symbol frequency -> English letter frequency")

@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from ciphersleuth.ngram import NgramModel  # noqa: E402
+from ciphersleuth.ngram import NgramModel
 
 
 def main() -> int:
@@ -36,7 +36,10 @@ def main() -> int:
     p.add_argument("-o", "--out", default=None, help="output JSON path")
     args = p.parse_args()
 
-    out = args.out or (Path(__file__).parent.parent / "data" / "ngrams" / f"english_{args.n}grams.json")
+    out = args.out or (
+        Path(__file__).parent.parent / "ciphersleuth" / "data" / "ngrams"
+        / f"english_{args.n}grams.json"
+    )
 
     model = NgramModel(n=args.n)
     total_chars = 0
