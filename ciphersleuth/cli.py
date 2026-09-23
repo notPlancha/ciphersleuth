@@ -141,7 +141,7 @@ def main(argv=None) -> int:
 
     b = sub.add_parser("break", help="fingerprint and break a ciphertext")
     add_text(b, required=False)
-    b.add_argument("--ciphers", nargs="*", help="restrict to these ciphers")
+    b.add_argument("--ciphers", nargs="*", help="restrict to these ciphers", choices=list_ciphers())
     b.add_argument("--verbose", action="store_true", help="show each candidate")
     b.add_argument("--restarts", type=int, default=5, help="substitution hill-climb restarts")
     b.add_argument("--seed", type=int, default=None,
